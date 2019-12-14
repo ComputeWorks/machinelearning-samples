@@ -2,7 +2,7 @@
 
 | ML.NET version | API type          | Status                        | App Type    | Data type | Scenario            | ML Task                   | Algorithms                  |
 |----------------|-------------------|-------------------------------|-------------|-----------|---------------------|---------------------------|-----------------------------|
-| v0.9           | Dynamic API | Up-to-date | Console app | .csv files | Price prediction | Regression | Sdca Regression |
+| v1.4           | Dynamic API | Up-to-date | Console app | .csv files | Price prediction | Regression | Sdca Regression |
 
 In this introductory sample, you'll see how to use [ML.NET](https://www.microsoft.com/net/learn/apps/machine-learning-and-ai/ml-dotnet) to predict taxi fares. In the world of machine learning, this type of prediction is known as **regression**.
 
@@ -41,40 +41,28 @@ Building a model includes: uploading data (`taxi-fare-train.csv` with `TextLoade
 MLContext mlContext = new MLContext(seed: 0);
 
 // STEP 1: Common data loading configuration
-TextLoader textLoader = mlContext.Data.CreateTextReader(new[]
-                                                        {
-                                                            new TextLoader.Column("VendorId", DataKind.Text, 0),
-                                                            new TextLoader.Column("RateCode", DataKind.Text, 1),
-                                                            new TextLoader.Column("PassengerCount", DataKind.R4, 2),
-                                                            new TextLoader.Column("TripTime", DataKind.R4, 3),
-                                                            new TextLoader.Column("TripDistance", DataKind.R4, 4),
-                                                            new TextLoader.Column("PaymentType", DataKind.Text, 5),
-                                                            new TextLoader.Column("FareAmount", DataKind.R4, 6)
-                                                        },
-                                                            hasHeader: true,
-                                                            separatorChar: ','
-                                                        );
-
-IDataView baseTrainingDataView = textLoader.Read(TrainDataPath);
-IDataView testDataView = textLoader.Read(TestDataPath);
+IDataView baseTrainingDataView = mlContext.Data.LoadFromTextFile<TaxiTrip>(TrainDataPath, hasHeader: true, separatorChar: ',');
+IDataView testDataView = mlContext.Data.LoadFromTextFile<TaxiTrip>(TestDataPath, hasHeader: true, separatorChar: ',');
 
 //Sample code of removing extreme data like "outliers" for FareAmounts higher than $150 and lower than $1 which can be error-data 
-var cnt = baseTrainingDataView.GetColumn<float>(mlContext, "FareAmount").Count();
-IDataView trainingDataView = mlContext.Data.FilterByColumn(baseTrainingDataView, "FareAmount", lowerBound: 1, upperBound: 150);
-var cnt2 = trainingDataView.GetColumn<float>(mlContext, "FareAmount").Count();
+var cnt = baseTrainingDataView.GetColumn<float>(nameof(TaxiTrip.FareAmount)).Count();
+IDataView trainingDataView = mlContext.Data.FilterRowsByColumn(baseTrainingDataView, nameof(TaxiTrip.FareAmount), lowerBound: 1, upperBound: 150);
+var cnt2 = trainingDataView.GetColumn<float>(nameof(TaxiTrip.FareAmount)).Count();
 
 // STEP 2: Common data process configuration with pipeline data transformations
-var dataProcessPipeline = mlContext.Transforms.CopyColumns("FareAmount", "Label")
-                .Append(mlContext.Transforms.Categorical.OneHotEncoding("VendorId", "VendorIdEncoded"))
-                .Append(mlContext.Transforms.Categorical.OneHotEncoding("RateCode", "RateCodeEncoded"))
-                .Append(mlContext.Transforms.Categorical.OneHotEncoding("PaymentType", "PaymentTypeEncoded"))
-                .Append(mlContext.Transforms.Normalize(inputName: "PassengerCount", mode: NormalizerMode.MeanVariance))
-                .Append(mlContext.Transforms.Normalize(inputName: "TripTime", mode: NormalizerMode.MeanVariance))
-                .Append(mlContext.Transforms.Normalize(inputName: "TripDistance", mode: NormalizerMode.MeanVariance))
-                .Append(mlContext.Transforms.Concatenate("Features", "VendorIdEncoded", "RateCodeEncoded", "PaymentTypeEncoded", "PassengerCount", "TripTime", "TripDistance"));
+var dataProcessPipeline = mlContext.Transforms.CopyColumns(outputColumnName: "Label", inputColumnName: nameof(TaxiTrip.FareAmount))
+                            .Append(mlContext.Transforms.Categorical.OneHotEncoding(outputColumnName: "VendorIdEncoded", inputColumnName: nameof(TaxiTrip.VendorId)))
+                            .Append(mlContext.Transforms.Categorical.OneHotEncoding(outputColumnName: "RateCodeEncoded", inputColumnName: nameof(TaxiTrip.RateCode)))
+                            .Append(mlContext.Transforms.Categorical.OneHotEncoding(outputColumnName: "PaymentTypeEncoded",inputColumnName: nameof(TaxiTrip.PaymentType)))
+                            .Append(mlContext.Transforms.NormalizeMeanVariance(outputColumnName: nameof(TaxiTrip.PassengerCount)))
+                            .Append(mlContext.Transforms.NormalizeMeanVariance(outputColumnName: nameof(TaxiTrip.TripTime)))
+                            .Append(mlContext.Transforms.NormalizeMeanVariance(outputColumnName: nameof(TaxiTrip.TripDistance)))
+                            .Append(mlContext.Transforms.Concatenate("Features", "VendorIdEncoded", "RateCodeEncoded", "PaymentTypeEncoded", nameof(TaxiTrip.PassengerCount)
+                            , nameof(TaxiTrip.TripTime), nameof(TaxiTrip.TripDistance)));
+
 
 // STEP 3: Set the training algorithm, then create and config the modelBuilder - Selected Trainer (SDCA Regression algorithm)                            
-var trainer = mlContext.Regression.Trainers.StochasticDualCoordinateAscent(labelColumn: "Label", featureColumn: "Features");
+var trainer = mlContext.Regression.Trainers.Sdca(labelColumnName: "Label", featureColumnName: "Features");
 var trainingPipeline = dataProcessPipeline.Append(trainer);
 ```
 
@@ -88,7 +76,7 @@ We need this step to conclude how accurate our model operates on new data. To do
 
 ```CSharp
 IDataView predictions = trainedModel.Transform(testDataView);
-var metrics = mlContext.Regression.Evaluate(predictions, label: "Label", score: "Score");
+var metrics = mlContext.Regression.Evaluate(predictions, labelColumnName: "Label", scoreColumnName: "Score");
 
 Common.ConsoleHelper.PrintRegressionMetrics(trainer.ToString(), metrics);
 
@@ -97,7 +85,7 @@ Common.ConsoleHelper.PrintRegressionMetrics(trainer.ToString(), metrics);
 
 If you are not satisfied with the quality of the model, there are a variety of ways to improve it, which will be covered in the *examples* category.
 
->*Keep in mind that for this sample the quality is lower than it could be because the datasets were reduced in size for performance purposes. You can use the original datasets to significantly improve the quality (Original datasets are referenced in datasets [README](../../../datasets/README.md)).*
+>*Keep in mind that for this sample the quality is lower than it could be because the datasets were reduced in size for performance purposes. You can use the original datasets to significantly improve the quality (Original datasets are referenced in datasets [README](../../../../datasets/README.md)).*
 
 ### 4. Consume model
 After the model is trained, we can use the `Predict()` API to predict the fare amount for specified trip. 
@@ -121,11 +109,11 @@ var taxiTripSample = new TaxiTrip()
 ITransformer trainedModel;
 using (var stream = new FileStream(ModelPath, FileMode.Open, FileAccess.Read, FileShare.Read))
 {
-    trainedModel = mlContext.Model.Load(stream);
+    trainedModel = mlContext.Model.Load(stream, out var modelInputSchema);
 }
 
 // Create prediction engine related to the loaded trained model
-var predEngine = trainedModel.CreatePredictionEngine<TaxiTrip, TaxiTripFarePrediction>(mlContext);
+var predEngine = mlContext.Model.CreatePredictionEngine<TaxiTrip, TaxiTripFarePrediction>(trainedModel);
 
 //Score
 var resultprediction = predEngine.Predict(taxiTripSample);
